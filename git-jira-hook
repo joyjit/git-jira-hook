@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
+##########################################################################
 # Copyright 2009 Broadcom Corporation
+#
 # Licensed under the Apache License, Version 2.0 (the "License"); 
 # you may not use this file except in compliance with the License. 
 # You may obtain a copy of the License at 
@@ -16,26 +18,31 @@
 # File: git-jira-hook
 # Author: Joyjit Nath
 #
-# Inspired by:
-#   http://github.com/dreiss/git-jira-attacher/tree/master
-#   http://confluence.atlassian.com/display/JIRAEXT/Jira+CLI
-#
-
+###########################################################################
 
 # Purpose:
-# This is a git hook, to be used in an environment wher git is used
+# This is a git hook, to be used in an environment where git is used
 # as the source control and Jira is used for bug tracking.
 # 
-# See README file for help in using this
+# See accompanying README file for help in using this.
 # 
 
 
 
 from __future__ import with_statement
 
+import logging
 import sys
-import contextlib
 import os
+
+myname = os.path.basename(sys.argv[0])
+
+# Change this value to "CRITICAL/ERROR/WARNING/INFO/DEBUG/NOTSET" 
+# as appropriate. 
+loglevel=logging.INFO
+
+
+import contextlib
 import subprocess
 import re
 import collections
@@ -44,94 +51,163 @@ import SOAPpy
 import traceback
 import pprint
 import pdb
-import logging
 import stat
 import cookielib
 import subprocess
 import urllib2
-
 import ConfigParser
 
 
+def main():
+    global myname, loglevel
+    logging.basicConfig(level=loglevel, format=myname + ":%(levelname)s: %(message)s")
 
-def get_cfg_value(cfg_file_name, section, key):
-    try:
-        cfg = ConfigParser.ConfigParser()
-        cfg.read(cfg_file_name)
-        value = cfg.get(section, key)
-    except:
-        return None
-    return value
-    
+    if myname == "commit-msg" :
+        if len(sys.argv) < 2 :
+            logging.error("No commit message filename specified") 
+            return -1
+        return handle_commit_msg(sys.argv[1])
 
-def save_cfg_value(cfg_file_name, section, key, value):
-    
-    try:
-        cfg = ConfigParser.SafeConfigParser()
-    except Exception, e:
-        logging.warning("Failed to instantiate a ConfigParser object")
-        logging.exception(e)
-        return
+    elif myname == "post-commit" :
+        return handle_post_commit()
 
-    try:
-        cfg.read(cfg_file_name)
-    except Exception, e:
-        logging.warning("Failed to read .jirarc")
-        logging.exception(e)
-        return
+    else:
+        logging.error("invoked as '%s'. Need to be invoked as commit-msg or post-commit" , myname)
+        return -1
+ 
 
-    try:
-        cfg.add_section(section)
-    except ConfigParser.DuplicateSectionError,e:
-        logging.debug("Section '%s' already exists in '%s'", section, cfg_file_name)
-
-    try:
-        cfg.set(section, key, value)
-    except Exception,e:
-        logging.warning("Failed to add '%s' to '%s'", key, cfg_file_name)
-        logging.exception(e)
+# This function performs the git "commit-msg" hook
+# In this function, the commit message text is parsed for the magic
+# text referencing Jira issues. 
+# It logs into Jira and makes sure that the Jira issues exist
+# and are accessible
+# This function does not actually add any comments to Jira
+# as the user's commit has not yet gone through (that
+# Parameter: Filename containing the commit message. This
+#            file is actually passed as a command line parameter
+#            to the hook
+# Returns: 0 on success, -1 on error
+def handle_commit_msg(commit_msg_filename):
+    jira_url = get_jira_url()
+    if jira_url == None:
+        return -1
 
     try:
-        cfg.write(open(cfg_file_name, 'wb'))
-    except Exception, e:
-        logging.warning("Failed to write '%s'='%s' to file %s", key, value, cfg_file_name)
-        logging.exception(e)
-        return
+        mode = os.stat(commit_msg_filename)[stat.ST_MODE]
+        if not stat.S_ISREG(mode):
+            logging.error("'%s' is not a valid file", commit_msg_filename)
 
-
-def get_jira_cached_auth(jira_url):
-    return get_cfg_value(os.environ['HOME'] + "/.jirarc", jira_url, "auth")
-
-def save_jira_cached_auth(jira_url, auth):
-    return save_cfg_value(os.environ['HOME'] + "/.jirarc", jira_url, "auth", auth)
-
-
-def git_config_get(name):
-    return get_shell_cmd_output("git config '" + name + "'")
-
-def get_shell_cmd_output(cmd):
-    try:
-        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-        return proc.stdout.read().rstrip('\n')
     except KeyboardInterrupt:
-        logging.info("... interrupted")
+        logging.info('... interrupted')
 
     except Exception, e:
-        logging.error("Failed trying to execute '%s'", cmd)
+        logging.error("Failed to open file '%s'", commit_msg_filename)
+        logging.debug(e)
+        return -1
+
+    (jira_soap_client, jira_auth) = jira_start_session(jira_url)
+
+    if jira_soap_client == None or jira_auth == None:
+        return -1
+
+    try:
+        commit_msg_text = open(commit_msg_filename).read()
+
+    except KeyboardInterrupt:
+        logging.info('... interrupted')
+
+    except Exception, e:
+        logging.error("Failed to open file '%s'", commit_msg_filename)
+        logging.debug(e)
+        return -1
+
+    refed_issue_count = call_pattern_hook(commit_msg_text, 'refs', \
+            jira_find_issue, jira_soap_client, jira_auth, None)
+
+    if refed_issue_count == -1:
+        return -1 
+
+
+    fixed_issue_count = call_pattern_hook(commit_msg_text, 'fixes', \
+                jira_find_issue, jira_soap_client, jira_auth, None)
+
+    if fixed_issue_count == -1:
+        return -1 
+
+
+    if refed_issue_count + fixed_issue_count == 0:
+        logging.error("Failed to find any referenced Jira issue in commit message")
+        return -1
+
+    logging.debug("%d issues refed, %d issues fixed", refed_issue_count, fixed_issue_count)
+    return 0
+
+
+# Performs the git "post-commit" hook
+# Uses "git" to find out the most recent commit
+# Parses commit message text to find references to Jira issues
+# and updates the Jira issue by adding the commit message text
+# to the issue
+# Returns: Nothing (as returning error wont do us any good
+#          on a post-commit hook)
+def handle_post_commit():
+    jira_url = get_jira_url()
+    if jira_url == None:
+        return
+
+    commit_id = git_get_last_commit_id()
+    commit_text = git_get_commit_msg(commit_id) 
+
+    (jira_soap_client, jira_auth) = jira_start_session(jira_url)
+
+    gitweb_url = get_gitweb_url()
+    if gitweb_url != None or gitweb_url != "":
+        commit_text_with_url = commit_text.replace(commit_id, \
+            "[" + commit_id + "|" + gitweb_url + commit_id + "]")
+    else:
+        commit_text_with_url = commit_text
+
+
+    call_pattern_hook(commit_text, 'refs', jira_add_comment_to_issue, \
+                                jira_soap_client, jira_auth, commit_text_with_url)
+    call_pattern_hook(commit_text, 'fixes', jira_add_comment_to_and_fix_issue, \
+                                jira_soap_client, jira_auth, commit_text_with_url)
     
+    return 
 
-def git_config_set(name, value):
-    os.system("git config " + name + " '" + value + "'")
 
-def git_config_unset(name):
-    os.system("git config --unset-all " + name)
+# Given a function pointer, iterates through the commit message 
+# text for Jira magic words, and calls the function repeatedly
+# returns number of issues found and touched
+# in case of error, return -1
+def call_pattern_hook(text, pattern, hookfn, jira_soap_client, jira_auth, jira_text):
+    if not callable(hookfn):
+        logging.error("Hook function is not callable");
+        exit -1
 
-def git_get_commit_msg(commit_id):
-    return get_shell_cmd_output("git rev-list --pretty --max-count=1 " + commit_id)
+    magic = re.compile(pattern + ' #\w\w*-\d\d*')
+    
+    iterator = magic.finditer(text)
+    issue_count = 0
+    for match in iterator: 
+        issuekey = match.group().split(" ", 2)[1].strip('#')
+        # print "issuekey found=", issuekey
+        ret = hookfn(issuekey, jira_soap_client, jira_auth, jira_text)
+        if ret != 0:
+            return -1
+        else:
+            issue_count += 1
 
-def git_get_last_commit_id():
-    return get_shell_cmd_output("git log --pretty=format:%H -1")
+    return issue_count
 
+#-----------------------------------------------------------------------------
+# Jira helper functions
+#
+
+
+# Given a Jira server URL (which is stored in git config)
+# Starts an authenticated jira session using SOAP api
+# Returns a list of the SOAP object and the authentication token
 def jira_start_session(jira_url):
     jira_url = jira_url.rstrip("/")
     try:
@@ -145,7 +221,7 @@ def jira_start_session(jira_url):
     except Exception, e:
         save_jira_cached_auth(jira_url, "")
         logging.error("Invalid Jira URL: '%s'", jira_url)
-        logging.exception(e)
+        logging.debug(e)
         return -1
 
     auth = jira_login(jira_url, soap_client)
@@ -154,13 +230,51 @@ def jira_start_session(jira_url):
 
     return (soap_client, auth)
 
+# Try to use the cached authentication object to log in
+# to Jira first. ("implicit")
+# if that fails, then prompt the user ("explicit")
+# for username/password
+def jira_login(jira_url, soap_client):
+
+    auth = get_jira_cached_auth(jira_url)
+    if auth != None and auth != "": 
+        auth = jira_implicit_login(soap_client, auth) 
+    else:
+        auth = None
+
+    if auth == None:
+        save_jira_cached_auth(jira_url, "")
+        auth = jira_explicit_login(soap_client)
+
+
+    if auth != None:
+        save_jira_cached_auth(jira_url, auth)
+
+    return auth
+
+def jira_implicit_login(soap_client, auth):
+
+    # test jira to see if auth is valid
+    try:
+        jira_types = soap_client.getIssueTypes(auth)
+        return auth
+    except KeyboardInterrupt:
+        logging.info("... interrupted")
+
+    except Exception, e:
+        print >> sys.stderr, "Previous Jira login is invalid or has expired"
+        # logging.debug(e)
+        
+
+    return None
+
 def jira_explicit_login(soap_client):
     max_retry_count = 3
     retry_count = 0
 
     while retry_count < max_retry_count:
         if retry_count > 0:
-            print >> sys.stderr, "Invalid Jira password/username combination, try again"
+            logging.info("Invalid Jira password/username combination, try again")
 
         # We now need to read the Jira username/password from
         # the console.
@@ -186,8 +300,15 @@ def jira_explicit_login(soap_client):
             except KeyboardInterrupt:
                 logging.info("... interrupted")
 
+            except Exception,e:
+                logging.error("User '%s' does not have access to Jira issues")
+                return None
+
         except KeyboardInterrupt:
             logging.info("... interrupted")
+
+        except Exception,e:
+            logging.debug("Login failed")
 
         auth=None
         retry_count = retry_count + 1
@@ -198,48 +319,13 @@ def jira_explicit_login(soap_client):
 
     return auth
 
-def jira_implicit_login(soap_client, auth):
-
-    # test jira to see if auth is valid
-    try:
-        jira_types = soap_client.getIssueTypes(auth)
-        return auth
-    except KeyboardInterrupt:
-        logging.info("... interrupted")
-
-    except Exception, e:
-        print >> sys.stderr, "Previous Jira login is invalid or has expired"
-        # logging.exception(e)
-        
-
-    return None
-
-# returns an auth object
-def jira_login(jira_url, soap_client):
-
-    auth = get_jira_cached_auth(jira_url)
-    if auth != None and auth != "": 
-        auth = jira_implicit_login(soap_client, auth) 
-    else:
-        auth = None
-
-    if auth == None:
-        save_jira_cached_auth(jira_url, "")
-        auth = jira_explicit_login(soap_client)
-
-
-    if auth != None:
-        save_jira_cached_auth(jira_url, auth)
-
-    return auth
 
 
 def jira_find_issue(issuekey, jira_soap_client, jira_auth, jira_text):
     try:
         issue = jira_soap_client.getIssue(jira_auth, issuekey)
-        logging.info("Found issue '%s' in Jira: (%s)",  
+        logging.debug("Found issue '%s' in Jira: (%s)",  
                     issuekey, issue["summary"])
-        # print "Found issue '%s' in Jira" % issuekey
         return 0
 
     except KeyboardInterrupt:
@@ -247,49 +333,31 @@ def jira_find_issue(issuekey, jira_soap_client, jira_auth, jira_text):
 
     except Exception, e:
         logging.error("No such issue '%s' in Jira", issuekey)
-        logging.exception(e)
+        logging.debug(e)
         return -1
 
 
 def jira_add_comment_to_issue(issuekey, jira_soap_client, jira_auth, jira_text):
     try:
         jira_soap_client.addComment(jira_auth, issuekey, {"body":jira_text})
-        logging.info("Added to issue '%s' in Jira:\n%s", issuekey, jira_text)
+        logging.debug("Added to issue '%s' in Jira:\n%s", issuekey, jira_text)
 
     except Exception, e:
         logging.error("Error adding comment to issue '%s' in Jira", issuekey)
-        logging.exception(e)
+        logging.debug(e)
         return -1
 
 
-def jira_add_comment_to_issue_and_close(issuekey, jira_soap_client, jira_text):
+# TODO: Not fully implemented yet!
+def jira_add_comment_to_and_fix_issue(issuekey, jira_soap_client, jira_text):
     return jira_add_comment_to_issue(issuekey, jira_soap_client, jira_text)
 
 
 
-# returns number of issues found and touched
-# in case of error, return -1
-def call_pattern_hook(text, pattern, hookfn, jira_soap_client, jira_auth, jira_text):
-    if not callable(hookfn):
-        logging.error("Hook function is not callable");
-        exit -1
 
-    magic = re.compile(pattern + ' #\w\w*-\d\d*')
-    
-    iterator = magic.finditer(text)
-    issue_count = 0
-    for match in iterator: 
-        issuekey = match.group().split(" ", 2)[1].strip('#')
-        # print "issuekey found=", issuekey
-        ret = hookfn(issuekey, jira_soap_client, jira_auth, jira_text)
-        if ret != 0:
-            return -1
-        else:
-            issue_count += 1
-
-    return issue_count
-
-
+#-----------------------------------------------------------------------------
+# Miscellaneous Jira related utility functions
+#
 def get_jira_url():
     jira_url = git_config_get("jira.url")
     if jira_url == None or jira_url == "":
@@ -298,109 +366,95 @@ def get_jira_url():
 
     return jira_url
 
-def handle_commit_msg(commit_msg_filename):
+def get_jira_cached_auth(jira_url):
+    return get_cfg_value(os.environ['HOME'] + "/.jirarc", jira_url, "auth")
 
-    jira_url = get_jira_url()
-    if jira_url == None:
-        return -1
-
-    try:
-        mode = os.stat(commit_msg_filename)[stat.ST_MODE]
-        if not stat.S_ISREG(mode):
-            logging.error("'%s' is not a valid file", commit_msg_filename)
-
-    except KeyboardInterrupt:
-        logging.info('... interrupted')
-
-    except Exception, e:
-        logging.error("Failed to open file '%s'", commit_msg_filename)
-        logging.exception(e)
-        return -1
-
-    (jira_soap_client, jira_auth) = jira_start_session(jira_url)
-
-    try:
-        commit_msg_text = open(commit_msg_filename).read()
-
-    except KeyboardInterrupt:
-        logging.info('... interrupted')
-
-    except Exception, e:
-        logging.error("Failed to open file '%s'", commit_msg_filename)
-        logging.exception(e)
-        return -1
-
-    refed_issue_count = call_pattern_hook(commit_msg_text, 'refs', \
-            jira_find_issue, jira_soap_client, jira_auth, None)
-
-    if refed_issue_count == -1:
-        return -1 
+def save_jira_cached_auth(jira_url, auth):
+    return save_cfg_value(os.environ['HOME'] + "/.jirarc", jira_url, "auth", auth)
 
 
-    fixed_issue_count = call_pattern_hook(commit_msg_text, 'fixes', \
-                jira_find_issue, jira_soap_client, jira_auth, None)
-
-    if fixed_issue_count == -1:
-        return -1 
-
-
-    if refed_issue_count + fixed_issue_count == 0:
-        logging.error("Failed to find any referenced Jira issue in commit message")
-        return -1
-
-    return 0
-
-
+#---------------------------------------------------------------------
+# Misc. helper functions
+#
 def get_gitweb_url():
     return git_config_get("gitweb.url")
 
-def handle_post_commit():
-    jira_url = get_jira_url()
-    if jira_url == None:
-        return -1
-
-
-    commit_id = git_get_last_commit_id()
-    commit_text = git_get_commit_msg(commit_id) 
-
-    (jira_soap_client, jira_auth) = jira_start_session(jira_url)
-
-    gitweb_url = get_gitweb_url()
-    if gitweb_url != None or gitweb_url != "":
-        commit_text_with_url = commit_text.replace(commit_id, \
-            "[" + commit_id + "|" + gitweb_url + commit_id + "]")
-    else:
-        commit_text_with_url = commit_text
-
-
-    error = call_pattern_hook(commit_text, 'refs', jira_add_comment_to_issue, \
-                                jira_soap_client, jira_auth, commit_text_with_url)
-    if error == 0:
-        error = call_pattern_hook(commit_text, 'fixes', jira_add_comment_to_and_fix_issue, \
-                                jira_soap_client, jira_auth, commit_text_with_url)
+def get_cfg_value(cfg_file_name, section, key):
+    try:
+        cfg = ConfigParser.ConfigParser()
+        cfg.read(cfg_file_name)
+        value = cfg.get(section, key)
+    except:
+        return None
+    return value
     
-    return error
+
+def save_cfg_value(cfg_file_name, section, key, value):
+    try:
+        cfg = ConfigParser.SafeConfigParser()
+    except Exception, e:
+        logging.warning("Failed to instantiate a ConfigParser object")
+        logging.debug(e)
+        return
+
+    try:
+        cfg.read(cfg_file_name)
+    except Exception, e:
+        logging.warning("Failed to read .jirarc")
+        logging.debug(e)
+        return
+
+    try:
+        cfg.add_section(section)
+    except ConfigParser.DuplicateSectionError,e:
+        logging.debug("Section '%s' already exists in '%s'", section, cfg_file_name)
+
+    try:
+        cfg.set(section, key, value)
+    except Exception,e:
+        logging.warning("Failed to add '%s' to '%s'", key, cfg_file_name)
+        logging.debug(e)
+
+    try:
+        cfg.write(open(cfg_file_name, 'wb'))
+    except Exception, e:
+        logging.warning("Failed to write '%s'='%s' to file %s", key, value, cfg_file_name)
+        logging.debug(e)
+        return
 
 
-def main():
-    myname = os.path.basename(sys.argv[0])
 
-    if myname == "commit-msg" :
-        if len(sys.argv) < 2 :
-            logging.error("No commit message filename specified") 
-            return -1
-        return handle_commit_msg(sys.argv[1])
+#----------------------------------------------------------------------------
+# git helper functions
+#
 
-    elif myname == "post-commit" :
-        return handle_post_commit()
+def git_config_get(name):
+    return get_shell_cmd_output("git config '" + name + "'")
 
-    else:
-        logging.error("invoked as '%s'. Need to be invoked as commit-msg or post-commit" , myname)
-        return -1
- 
-    return 0
+def get_shell_cmd_output(cmd):
+    try:
+        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
+        return proc.stdout.read().rstrip('\n')
+    except KeyboardInterrupt:
+        logging.info("... interrupted")
 
+    except Exception, e:
+        logging.error("Failed trying to execute '%s'", cmd)
+    
+def git_config_set(name, value):
+    os.system("git config " + name + " '" + value + "'")
 
+def git_config_unset(name):
+    os.system("git config --unset-all " + name)
+
+def git_get_commit_msg(commit_id):
+    return get_shell_cmd_output("git rev-list --pretty --max-count=1 " + commit_id)
+
+def git_get_last_commit_id():
+    return get_shell_cmd_output("git log --pretty=format:%H -1")
+
+#----------------------------------------------------------------------------
+# python script entry point. Dispatches main()
 if __name__ == "__main__":
   exit (main())
     

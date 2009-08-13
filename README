@@ -30,6 +30,7 @@ Table of Contents
     4. Using git-jira-hook
     5. Known limitations
     6. Frequently Asked Questions (FAQ)
+    7. Credits
 
 
 1. Introduction
@@ -166,26 +167,46 @@ I am working to fix both of these issues:
 
    * The "fixes" text does not yet mark the Jira issue as resolved.
 
-   * The error messages  are a bit confusing (cluttered with too much detail)
+   * The error messages  are a bit confusing (cluttered with too much detail).
+
+   * This is my very first attempt at writing code, so its not very well written.
 
 
 6. Frequently asked Questions
 =============================
 
-6.1 Q. What value should I use for "jira.url" git config?
+Q 6.1  What value should I use for "jira.url" git config?
     A. It depends on your Jira server setup. When you log-in to the Jira 
        server using a browser, the URL to the login page typically looks like:
            http://jira.mycompany.com/secure/Dashboard.jspa 
        In which case, your "jira.url" should be "http://jira.mycompany.com"
  
 
-6.2 Q. What value should I use for "gitweb.url" git config?
+Q 6.2  What value should I use for "gitweb.url" git config?
     A. Assuming you have gitweb enabled for your repository, this is the URL which you
        use to access gitweb.
        for instance, in order to view commit "424daa955f5c8a17aab9d524071f65f1999769a9"
        in gitweb, if you use:
-http://git.mycompany.com/gitweb.cgi/p=joyjit-repo/.git;a=commit;h=424daa955f5c8a17aab9d524071f65f1999769a9
+http://git.mycompany.com/gitweb.cgi?p=joyjit-repo/.git;a=commit;h=424daa955f5c8a17aab9d524071f65f1999769a9
 
        Then the "gitweb.url" to use is:
-       "http://git.mycompany.com/gitweb.cgi/p=joyjit-repo/.git;a=commit;h="
+       "http://git.mycompany.com/gitweb.cgi?p=joyjit-repo/.git;a=commit;h="
 
+
+7. Credits
+==========
+This script was inspired by the following:
+   http://github.com/dreiss/git-jira-attacher/tree/master
+   http://confluence.atlassian.com/display/JIRAEXT/Jira+CLI
+
+
+8. References
+=============
+[1] Git, an source configuratiin management ("SCM") tool
+    http://git-scm.com/
+
+[2] Jira,  a bug tracking system
+    http://www.atlassian.com/software/jira
+
+[3] Gitweb, a web based browser for git
+    http://git.or.cz/gitwiki/Gitweb
