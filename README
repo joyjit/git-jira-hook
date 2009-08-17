@@ -219,12 +219,16 @@ NOTE: The "fixes" feature does not work yet :<
 5. Known Limitations
 ====================
 
-I am working to fix both of these issues:
+I am working to fix all of these issues:
+   * Need the ability to enable the hook only when commits (or push) are
+     done on certain branches.
+
    * The "fixes" text does not yet mark the Jira issue as resolved.
 
    * The error messages  are a bit confusing (cluttered with too much detail).
 
-   * This is my very first attempt at writing code, so its not very well written.
+DISCLAIMER: This is my very first attempt at writing python code, so it is not 
+very well written.
 
 
 6. Frequently asked Questions
