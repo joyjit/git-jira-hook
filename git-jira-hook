@@ -40,6 +40,7 @@ myname = os.path.basename(sys.argv[0])
 # Change this value to "CRITICAL/ERROR/WARNING/INFO/DEBUG/NOTSET" 
 # as appropriate. 
 loglevel=logging.INFO
+# loglevel=logging.DEBUG
 
 
 import contextlib
@@ -56,6 +57,7 @@ import cookielib
 import subprocess
 import urllib2
 import ConfigParser
+import string
 
 
 def main():
@@ -71,8 +73,19 @@ def main():
     elif myname == "post-commit" :
         return handle_post_commit()
 
+    elif myname == "update":
+        if len(sys.argv) < 4:
+            logging.error("update hook called with incorrect no. of parameters")
+            return -1
+
+        return handle_update(sys.argv[2], sys.argv[3])
+
+    elif myname == "post-receive":
+        return handle_post_receive()
+
+
     else:
-        logging.error("invoked as '%s'. Need to be invoked as commit-msg or post-commit" , myname)
+        logging.error("invoked as '%s'. Need to be invoked as commit-msg, post-commit, update or post-receive" , myname)
         return -1
  
 
@@ -121,32 +134,14 @@ def handle_commit_msg(commit_msg_filename):
         logging.debug(e)
         return -1
 
-    refed_issue_count = call_pattern_hook(commit_msg_text, 'refs', \
-            jira_find_issue, jira_soap_client, jira_auth, None)
-
-    if refed_issue_count == -1:
-        return -1 
-
-
-    fixed_issue_count = call_pattern_hook(commit_msg_text, 'fixes', \
-                jira_find_issue, jira_soap_client, jira_auth, None)
-
-    if fixed_issue_count == -1:
-        return -1 
-
-
-    if refed_issue_count + fixed_issue_count == 0:
-        logging.error("Failed to find any referenced Jira issue in commit message")
-        return -1
-
-    logging.debug("%d issues refed, %d issues fixed", refed_issue_count, fixed_issue_count)
-    return 0
+    return validate_commit_text(jira_soap_client, jira_auth, commit_msg_text)
 
 
 # Performs the git "post-commit" hook
 # Uses "git" to find out the most recent commit
 # Parses commit message text to find references to Jira issues
 # and updates the Jira issue by adding the commit message text
+    
 # to the issue
 # Returns: Nothing (as returning error wont do us any good
 #          on a post-commit hook)
@@ -160,6 +155,84 @@ def handle_post_commit():
 
     (jira_soap_client, jira_auth) = jira_start_session(jira_url)
 
+    jira_add_comment(jira_soap_client, jira_auth, commit_id, commit_text)
+    return 
+
+
+def handle_update(old_commit_id, new_commit_id):
+    jira_url = get_jira_url()
+    if jira_url == None:
+        return -1
+
+    (jira_soap_client, jira_auth) = jira_start_session(jira_url)
+    if jira_soap_client == None or jira_auth == None:
+        return -1
+
+    commit_id_array = git_get_array_of_commit_ids(old_commit_id, new_commit_id)
+
+    for commit_id in commit_id_array:
+        commit_text = git_get_commit_msg(commit_id)
+        if validate_commit_text(jira_soap_client, jira_auth, commit_text) != 0:
+            return -1
+        
+    return 0
+
+def handle_post_receive():
+    # post-receive hook is called with no parameters
+    # but STDIN has <old-commit-id> <new-commit-id> <refname>
+    buf = sys.stdin.read()
+    logging.debug("buf='%s'", buf)
+    (old_commit_id, new_commit_id, ref) =  string.split(buf, ' ')
+
+
+    if old_commit_id == None or new_commit_id == None:
+        logging.error("post-receive hook stdin is incorrect '%s'", buf)
+        return -1
+
+    jira_url = get_jira_url()
+    if jira_url == None:
+        return -1
+
+    (jira_soap_client, jira_auth) = jira_start_session(jira_url)
+    if jira_soap_client == None or jira_auth == None:
+        return -1
+
+    commit_id_array = git_get_array_of_commit_ids(old_commit_id, new_commit_id)
+
+    if commit_id_array == None or len(commit_id_array)==0:
+        logging.error("no commit ids!")
+        return -1
+
+    for commit_id in commit_id_array:
+        commit_text = git_get_commit_msg(commit_id)
+        jira_add_comment(jira_soap_client, jira_auth, commit_id, commit_text)
+
+    return 0
+        
+
+
+def validate_commit_text(jira_soap_client, jira_auth, commit_text):
+    refed_issue_count = call_pattern_hook(commit_text, "refs", \
+            jira_find_issue, jira_soap_client, jira_auth, None)
+
+    if refed_issue_count == -1:
+        return -1
+
+    fixed_issue_count = call_pattern_hook(commit_text, "fixes", \
+            jira_find_issue, jira_soap_client, jira_auth, None)
+
+    if fixed_issue_count == -1:
+        return -1
+
+
+    if refed_issue_count + fixed_issue_count == 0:
+        logging.error("Failed to find any referenced Jira issue in commit id %s", commit_id)
+        return -1
+
+    return 0
+
+
+def jira_add_comment(jira_soap_client, jira_auth, commit_id, commit_text):
     gitweb_url = get_gitweb_url()
     if gitweb_url != None or gitweb_url != "":
         commit_text_with_url = commit_text.replace(commit_id, \
@@ -172,8 +245,12 @@ def handle_post_commit():
                                 jira_soap_client, jira_auth, commit_text_with_url)
     call_pattern_hook(commit_text, 'fixes', jira_add_comment_to_and_fix_issue, \
                                 jira_soap_client, jira_auth, commit_text_with_url)
+    return
     
-    return 
+
+    
+    
+
 
 
 # Given a function pointer, iterates through the commit message 
@@ -452,6 +529,15 @@ def git_get_commit_msg(commit_id):
 
 def git_get_last_commit_id():
     return get_shell_cmd_output("git log --pretty=format:%H -1")
+
+def git_get_array_of_commit_ids(start_id, end_id):
+    output = get_shell_cmd_output("git rev-list " + start_id + ".." + end_id)
+    if output == "":
+        return None
+    
+    # parse the result into an array of strings
+    commit_id_array = string.split(output, '\n')
+    return commit_id_array
 
 #----------------------------------------------------------------------------
 # python script entry point. Dispatches main()

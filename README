@@ -38,12 +38,12 @@ Table of Contents
 
 1.1 Get git and Jira to work in Harmony
 ---------------------------------------
-If you are using git [1] for source control and Jira [2] for bug tracking,
-then the git-jira-hook script might be useful to you.
+If you are using git [1] for source control and Jira [2] for bug 
+tracking, then the git-jira-hook script might be useful to you.
 
-Once you have the script setup in your environment, every time you make
-a git commit, a comment is automatically posted to an open issue in
-Jira.
+Once you have the script setup in your environment, every time you 
+make a git commit, a comment is automatically posted to an open 
+issue in Jira.
 
 This script will also "enforce" that for every git commit, you have at
 least one Jira issue that you are referencing.
@@ -91,8 +91,9 @@ following comments will be added:
     refs #SW-189, refs #HW-278 fixes #FW-702
 
 In addition, 
-    * the issue "FW=702" will be marked as resolved. (NOTE: this "resolved" part does not
-      work yet. See "Known Limitations" section.)
+    * the issue "FW=702" will be marked as resolved. (NOTE: 
+      this "resolved" part does not work yet. See "Known 
+      Limitations" section.)
 
 1.3 Wait! there's  more
 -----------------------
@@ -111,60 +112,114 @@ commit simply by clicking on the hyperlink.
 
     - git version 1.6.x.y (I have tested with 1.6.0.4).
 
-    - Linux or some other similar Unix flavor (I have tested with CentOS 5.x).
+    - Linux or some other similar Unix flavor (I have tested with 
+      CentOS 5.x).
 
-    - OPTIONAL, but Highly recommended: gitweb [4] which has been setup with 
-      your git repositories.
+    - OPTIONAL, but Highly recommended: gitweb [4] which has been 
+      setup with "upstream" git repositories.
 
 
 
 3. Installation
 ===============
+Here is a typical example of how this hook may be used.
 
-(i)   Copy this script to <your-git-rep-GIT-dir>/hooks/commit-msg and mark it executable
-      Example:
-       cp git-jira-hook joyjit-repo/.git/hooks/commit-msg
-       chmod +x joyjit-repo/.git/hooks/commit-msg
+In a corporate setting where git is used, there is typically an 
+"upstream" or "public" repository. And then developers have their 
+"private" repositories.  For their day-to-day work, the developers 
+use their private repositories.  Periodically, they (either 
+directly, or via gatekeepers) push changes from their private 
+repository to the "upstream" one. Also, the "upstream" repository 
+is typically a bare repository, and no actual commits are done
+here.
 
-(ii)  Create link to <your-git-rep-GIT-dir>/hooks/post-commit and mark it executable
+In the private repository, the hook should be installed, but only 
+*partically*. Every time a commit is made, the hook only checks to
+make sure that the commit text conforms to correct formatting (i.e. 
+the magic references to Jira issues are present). No Jira issues 
+are updated.
+
+The hook is completely installed in the "upstream" repository.
+
+Whenever a commit is made in the upstream repository or a "git push" 
+is done to it, the  installed hook will kick in and validate the 
+commit message, followed by update of the Jira issue.
+
+
+3.1 Installtion for "private" repository
+----------------------------------------
+(i)   Copy this script to <your-git-repo-GIT-dir>/hooks/commit-msg 
+      and mark it executable
       Example:
-       ln joyjit-repo/.git/hooks/commit-msg joyjit-repo/.git/hooks/post-commit
+       cp git-jira-hook joyjit-project/.git/hooks/commit-msg
+       chmod +x joyjit-project/.git/hooks/commit-msg
+
+
+(iii) Set the following git config value 
+      Example:
+       cd joyjit-repo
+       git config jira.url "http://jira.mycompany.com"
+
+See the "Frequently Asked Questions" section to figure out what 
+values to use for your "jira.url". 
+
+3.2 Installation for "upstream" repository
+------------------------------------------
+(i)   Copy this script to 
+      <upstream-repo-GIT-dir>/hooks/{commit-msg|post-commit|update|post-receive} 
+      and mark it executable
+
+      Example:
+       cp git-jira-hook upstream-project.git/hooks/commit-msg
+       cp git-jira-hook upstream-project.git/hooks/post-commit
+       cp git-jira-hook upstream-project.git/hooks/update
+       cp git-jira-hook upstream-project.git/hooks/post-receive
+       chmod +x upstream-project.git/hooks/commit-msg
+       chmod +x upstream-project.git/hooks/post-commit
+       chmod +x upstream-project.git/hooks/update
+       chmod +x upstream-project.git/hooks/post-receive
 
 (iii) Set the following git config values (Note: gitweb.url config is 
       recommended, but Optional): "jira.url" "gitweb.url"
       Example:
-       cd joyjit-repo
-       git config jira.url "http://jira.mycompany.com"
-       git config gitweb.url "http://git.mycompany.com/gitweb.cgi/p=joyjit-repo/.git;a=commit;h="
+      cd upstream.git
+      git config jira.url "http://jira.mycompany.com"
+      git config gitweb.url "http://git.mycompany.com/gitweb.cgi/p=upstream-project.git;a=commit;h="
 
-See the "Frequently Asked Questions" section to figure out what values to use
-for your "jira.url" and "gitweb.url"
+See the "Frequently Asked Questions" section to figure out what values 
+to use for your "jira.url" and "gitweb.url"
 
 
 4. Using git-jira-hook
 ======================
-When you are read to make a git commit, make sure that you have an appropriate
-open jira issue. There can be more than one open issues.
-Lets say this commit deals with Jira issues FOO-23 and BAR-42  and also
-marks FOO-56 as resolved.
+When you are read to make a git commit, make sure that you have an 
+appropriate open jira issue. There can be more than one open issues.
+Lets say this commit deals with Jira issues FOO-23 and BAR-42  and 
+also marks FOO-56 as resolved.
 
-Anywhere in your commit message, you must put the following strings (without the quotes):
+Anywhere in your commit message, you must put the following strings 
+(without the quotes):
    "refs #FOO-23"
    "refs #BAR-42"
    "fixes #FOO-56"
 
-NOTE: The "fixes" feature does not work yet :<
 
+
+And then you do a "git commit" the normal way. At this time, assuming 
+the "private" repository, the commit message will be checked for 
+references to Jira issues and the commit will succeed only if these
+issues exist.
+
+And then, at a later time, when you do "git push" to push your changes
+upstream, the final validation and Jira issue update will be done.
+
+NOTE: The "fixes" feature does not work yet :<
 
 
 5. Known Limitations
 ====================
 
 I am working to fix both of these issues:
-   * Currently, only works with "git commit". If you are pushing to an upstream
-     repository and that repository has been enabled with git-jira-hook, this
-     will not work.
-
    * The "fixes" text does not yet mark the Jira issue as resolved.
 
    * The error messages  are a bit confusing (cluttered with too much detail).
