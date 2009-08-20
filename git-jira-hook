@@ -65,20 +65,13 @@ def main():
     logging.basicConfig(level=loglevel, format=myname + ":%(levelname)s: %(message)s")
 
     if myname == "commit-msg" :
-        if len(sys.argv) < 2 :
-            logging.error("No commit message filename specified") 
-            return -1
-        return handle_commit_msg(sys.argv[1])
+        return handle_commit_msg()
 
     elif myname == "post-commit" :
         return handle_post_commit()
 
     elif myname == "update":
-        if len(sys.argv) < 4:
-            logging.error("update hook called with incorrect no. of parameters")
-            return -1
-
-        return handle_update(sys.argv[2], sys.argv[3])
+        return handle_update()
 
     elif myname == "post-receive":
         return handle_post_receive()
@@ -96,11 +89,14 @@ def main():
 # and are accessible
 # This function does not actually add any comments to Jira
 # as the user's commit has not yet gone through (that
-# Parameter: Filename containing the commit message. This
-#            file is actually passed as a command line parameter
-#            to the hook
 # Returns: 0 on success, -1 on error
-def handle_commit_msg(commit_msg_filename):
+def handle_commit_msg():
+    if len(sys.argv) < 2 :
+        logging.error("No commit message filename specified") 
+        return -1
+
+    commit_msg_filename = sys.argv[1]
+
     jira_url = get_jira_url()
     if jira_url == None:
         return -1
@@ -159,7 +155,14 @@ def handle_post_commit():
     return 
 
 
-def handle_update(old_commit_id, new_commit_id):
+def handle_update():
+    if len(sys.argv) < 4:
+        logging.error("update hook called with incorrect no. of parameters")
+        return -1
+
+    old_commit_id = sys.argv[2]
+    new_commit_id = sys.argv[3]
+
     jira_url = get_jira_url()
     if jira_url == None:
         return -1
