@@ -155,6 +155,11 @@ def handle_post_commit():
     return 
 
 
+# Performs the git "update" hook
+# This hook is triggered on the remote repo, as a result
+# of "git push"
+# Parses the old and new commit IDs from argv[2] and argv[3]
+# argv[1] contains the "refname"
 def handle_update():
     if len(sys.argv) < 4:
         logging.error("update hook called with incorrect no. of parameters")
@@ -180,9 +185,9 @@ def handle_update():
         
     return 0
 
+# post-receive hook is called with no parameters
+# but STDIN has <old-commit-id> <new-commit-id> <refname>
 def handle_post_receive():
-    # post-receive hook is called with no parameters
-    # but STDIN has <old-commit-id> <new-commit-id> <refname>
     buf = sys.stdin.read()
     logging.debug("buf='%s'", buf)
     (old_commit_id, new_commit_id, ref) =  string.split(buf, ' ')
