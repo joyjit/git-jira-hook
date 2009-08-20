@@ -40,7 +40,7 @@ myname = os.path.basename(sys.argv[0])
 # Change this value to "CRITICAL/ERROR/WARNING/INFO/DEBUG/NOTSET" 
 # as appropriate. 
 loglevel=logging.INFO
-# loglevel=logging.DEBUG
+loglevel=logging.DEBUG
 
 
 import contextlib
@@ -91,6 +91,9 @@ def main():
 # as the user's commit has not yet gone through (that
 # Returns: 0 on success, -1 on error
 def handle_commit_msg():
+    if not enabled_on_branch(git_get_curr_branchname()):
+        return 0
+
     if len(sys.argv) < 2 :
         logging.error("No commit message filename specified") 
         return -1
@@ -142,6 +145,9 @@ def handle_commit_msg():
 # Returns: Nothing (as returning error wont do us any good
 #          on a post-commit hook)
 def handle_post_commit():
+    if not enabled_on_branch(git_get_curr_branchname()):
+        return 0
+
     jira_url = get_jira_url()
     if jira_url == None:
         return
@@ -189,7 +195,7 @@ def handle_update():
 # but STDIN has <old-commit-id> <new-commit-id> <refname>
 def handle_post_receive():
     buf = sys.stdin.read()
-    logging.debug("buf='%s'", buf)
+    logging.debug("handle_post_receive: stdin='%s'", buf)
     (old_commit_id, new_commit_id, ref) =  string.split(buf, ' ')
 
 
@@ -234,7 +240,7 @@ def validate_commit_text(jira_soap_client, jira_auth, commit_text):
 
 
     if refed_issue_count + fixed_issue_count == 0:
-        logging.error("Failed to find any referenced Jira issue in commit id %s", commit_id)
+        logging.error("Failed to find any referenced Jira issue in commit message(s)")
         return -1
 
     return 0
@@ -507,15 +513,8 @@ def save_cfg_value(cfg_file_name, section, key, value):
         logging.debug(e)
         return
 
-
-
-#----------------------------------------------------------------------------
-# git helper functions
-#
-
-def git_config_get(name):
-    return get_shell_cmd_output("git config '" + name + "'")
-
+# given a string, executes it as an executable, and returns the STDOUT
+# as a string
 def get_shell_cmd_output(cmd):
     try:
         proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
@@ -525,7 +524,44 @@ def get_shell_cmd_output(cmd):
 
     except Exception, e:
         logging.error("Failed trying to execute '%s'", cmd)
-    
+
+#----------------------------------------------------------------------------
+# git helper functions
+#
+
+def enabled_on_branch(branchname):
+    logging.debug("Test if '%s' is enabled...", branchname)
+    branchstr = git_config_get("git-jira-hook.branches")
+    if branchstr == None or string.strip(branchstr) == "":
+        logging.debug("All branches enabled")
+        return not False
+
+    branchlist = string.split(branchstr, ',')
+
+    for branch in branchlist:
+        branch = string.strip(branch)
+        if branchname == branch:
+            logging.debug("Current branch '%s' is enabled", branchname)
+            return not False
+
+    logging.debug("Curent branch '%s' is NOT enabled", branchname)
+    return False
+
+def git_get_curr_branchname():
+    buf = get_shell_cmd_output("git branch --no-color")
+    # buf is a multiline output, each line containing a branch name
+    # the line that starts with a "*" contains the current branch name
+
+    m = re.search("^\* .*$", buf, re.MULTILINE)
+    if m == None:
+        return None
+
+    return buf[m.start()+2 : m.end()]
+
+
+def git_config_get(name):
+    return get_shell_cmd_output("git config '" + name + "'")
+
 def git_config_set(name, value):
     os.system("git config " + name + " '" + value + "'")
 
@@ -547,6 +583,7 @@ def git_get_array_of_commit_ids(start_id, end_id):
     commit_id_array = string.split(output, '\n')
     return commit_id_array
 
+    
 #----------------------------------------------------------------------------
 # python script entry point. Dispatches main()
 if __name__ == "__main__":
