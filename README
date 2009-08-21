@@ -161,7 +161,7 @@ commit message, followed by update of the Jira issue.
        git config jira.url "http://jira.mycompany.com"
 
 (iv)  [Optional] If you wish jira integration to be triggered only
-      on certain branches, add a comma-separate list of 
+      on certain branches, add a comma-separated list of 
       branch names to git config "git-jira-hook.branches"
       For example:
    
@@ -201,6 +201,20 @@ values to use for your "jira.url".
       git config jira.url "http://jira.mycompany.com"
       git config gitweb.url "http://git.mycompany.com/gitweb.cgi/p=upstream-project.git;a=commit;h="
 
+(iv)  [Optional] If you wish jira integration to be triggered only
+      on certain branches, add a comma-separated list of 
+      branch names to git config "git-jira-hook.branches"
+      For example:
+   
+        cd joyjit-repo
+        git config git-jira-hook.branches "jira1,jira2"
+
+      This will cause the integration to be triggered only on
+      git branches jira1 and jira2. For instance, if you make a commit
+      to branch "master", the hook will simply stay disabled.
+
+      By default, if you do not set this config, all branches are 
+      checked.
 See the "Frequently Asked Questions" section to figure out what values 
 to use for your "jira.url" and "gitweb.url"
 
@@ -235,10 +249,6 @@ NOTE: The "fixes" feature does not work yet :<
 ====================
 
 I am working to fix all of these issues:
-   * Need the ability to enable the hook only when commits (or push) are
-     done on certain branches. At present this feature is implemented
-     only for local commits, but not for remote pushes.
-
    * The "fixes" text does not yet mark the Jira issue as resolved.
 
    * The error messages  are a bit confusing (cluttered with too much detail).

@@ -171,8 +171,12 @@ def handle_update():
         logging.error("update hook called with incorrect no. of parameters")
         return -1
 
+    ref = sys.argv[1] # This is of the form "refs/heads/<branchname>"
     old_commit_id = sys.argv[2]
     new_commit_id = sys.argv[3]
+
+    if not enabled_on_branch(git_get_branchname_from_ref(ref)):
+        return 0
 
     jira_url = get_jira_url()
     if jira_url == None:
@@ -186,7 +190,7 @@ def handle_update():
 
     for commit_id in commit_id_array:
         commit_text = git_get_commit_msg(commit_id)
-        if validate_commit_text(jira_soap_client, jira_auth, commit_text) != 0:
+        if validate_commit_text(jira_soap_client, jira_auth, commit_text, commit_id) != 0:
             return -1
         
     return 0
@@ -199,9 +203,13 @@ def handle_post_receive():
     (old_commit_id, new_commit_id, ref) =  string.split(buf, ' ')
 
 
-    if old_commit_id == None or new_commit_id == None:
+    if old_commit_id == None or new_commit_id == None or ref == None:
         logging.error("post-receive hook stdin is incorrect '%s'", buf)
         return -1
+
+    if not enabled_on_branch(git_get_branchname_from_ref(ref)):
+        return 0
+
 
     jira_url = get_jira_url()
     if jira_url == None:
@@ -225,7 +233,7 @@ def handle_post_receive():
         
 
 
-def validate_commit_text(jira_soap_client, jira_auth, commit_text):
+def validate_commit_text(jira_soap_client, jira_auth, commit_text, commit_id=None):
     refed_issue_count = call_pattern_hook(commit_text, "refs", \
             jira_find_issue, jira_soap_client, jira_auth, None)
 
@@ -240,7 +248,10 @@ def validate_commit_text(jira_soap_client, jira_auth, commit_text):
 
 
     if refed_issue_count + fixed_issue_count == 0:
-        logging.error("Failed to find any referenced Jira issue in commit message(s)")
+        if commit_id != None:
+            logging.error("Failed to find any referenced Jira issue\n\tin commit message for commit %s", commit_id)
+        else:
+            logging.error("Failed to find any referenced Jira issue in commit message(s)")
         return -1
 
     return 0
@@ -529,7 +540,13 @@ def get_shell_cmd_output(cmd):
 # git helper functions
 #
 
-def enabled_on_branch(branchname):
+# Read git config of "git-jira-hook.branches"
+# Parse out the comma (and space) separated list of
+# branch names.
+# Then compare against current branchname to see
+# if we need to be enabled.
+# Return False if we should not be enabled
+def enabled_on_branch(current_branchname):
     logging.debug("Test if '%s' is enabled...", branchname)
     branchstr = git_config_get("git-jira-hook.branches")
     if branchstr == None or string.strip(branchstr) == "":
@@ -540,13 +557,14 @@ def enabled_on_branch(branchname):
 
     for branch in branchlist:
         branch = string.strip(branch)
-        if branchname == branch:
-            logging.debug("Current branch '%s' is enabled", branchname)
+        if current_branchname == branch:
+            logging.debug("Current branch '%s' is enabled", current_branchname)
             return not False
 
-    logging.debug("Curent branch '%s' is NOT enabled", branchname)
+    logging.debug("Curent branch '%s' is NOT enabled", current_branchname)
     return False
 
+# Get our current branchname
 def git_get_curr_branchname():
     buf = get_shell_cmd_output("git branch --no-color")
     # buf is a multiline output, each line containing a branch name
@@ -557,6 +575,17 @@ def git_get_curr_branchname():
         return None
 
     return buf[m.start()+2 : m.end()]
+
+
+# Given a "ref" string (such as while doing a push
+# to a remote repo), parse out the branch name
+def git_get_branchname_from_ref(ref):
+    # "refs/heads/<branchname>"
+    if string.find(ref, "refs/heads") != 0:
+        logging.error("Invalid ref '%s'", ref)
+        exit -1
+
+    return string.strip(ref[len("refs/heads/"):])
 
 
 def git_config_get(name):
