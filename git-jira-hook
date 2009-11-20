@@ -39,7 +39,7 @@ myname = os.path.basename(sys.argv[0])
 
 # Change this value to "CRITICAL/ERROR/WARNING/INFO/DEBUG/NOTSET" 
 # as appropriate. 
-loglevel=logging.INFO
+# loglevel=logging.INFO
 # loglevel=logging.DEBUG
 
 
@@ -547,7 +547,7 @@ def get_shell_cmd_output(cmd):
 # if we need to be enabled.
 # Return False if we should not be enabled
 def enabled_on_branch(current_branchname):
-    logging.debug("Test if '%s' is enabled...", branchname)
+    logging.debug("Test if '%s' is enabled...", current_branchname)
     branchstr = git_config_get("git-jira-hook.branches")
     if branchstr == None or string.strip(branchstr) == "":
         logging.debug("All branches enabled")
