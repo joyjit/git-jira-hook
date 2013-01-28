@@ -39,8 +39,7 @@ myname = os.path.basename(sys.argv[0])
 
 # Change this value to "CRITICAL/ERROR/WARNING/INFO/DEBUG/NOTSET" 
 # as appropriate. 
-# loglevel=logging.INFO
-loglevel=logging.DEBUG
+loglevel=logging.INFO
 
 
 import contextlib
@@ -154,7 +153,10 @@ def handle_post_commit():
         return
 
     commit_id = git_get_last_commit_id()
-    commit_text = git_get_commit_msg(commit_id) 
+    commit_text = git_get_commit_msg(commit_id)
+    changed_files = git_get_commit_files(commit_id)
+    commit_text = """%s
+    %s""" %(commit_text, changed_files)
 
     (jira_soap_client, jira_auth) = jira_start_session(jira_url)
 
@@ -671,6 +673,9 @@ def git_config_unset(name):
 
 def git_get_commit_msg(commit_id):
     return get_shell_cmd_output("git rev-list --pretty --max-count=1 " + commit_id)
+
+def git_get_commit_files(commit_id):
+    return get_shell_cmd_output("git diff-tree --no-commit-id --name-only -r " + commit_id)
 
 def git_get_last_commit_id():
     return get_shell_cmd_output("git log --pretty=format:%H -1")
