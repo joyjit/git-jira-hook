@@ -64,6 +64,7 @@ def main():
     global myname, loglevel
     logging.basicConfig(level=loglevel, format=myname + ":%(levelname)s: %(message)s")
 
+    logging.debug("invoked as '%s'." , myname)
     if myname == "commit-msg" :
         return handle_commit_msg()
 
@@ -238,12 +239,14 @@ def validate_commit_text(jira_soap_client, jira_auth, commit_text, commit_id=Non
             jira_find_issue, jira_soap_client, jira_auth, None)
 
     if refed_issue_count == -1:
+        logging.debug("Failed to find any referenced Jira issue\n\tin commit message for commit %s", commit_id)
         return -1
 
     fixed_issue_count = call_pattern_hook(commit_text, "fixes", \
             jira_find_issue, jira_soap_client, jira_auth, None)
 
     if fixed_issue_count == -1:
+        logging.debug("Failed to find any fixed Jira issue\n\tin commit message for commit %s", commit_id)
         return -1
 
 
@@ -253,7 +256,8 @@ def validate_commit_text(jira_soap_client, jira_auth, commit_text, commit_id=Non
         else:
             logging.error("Failed to find any referenced Jira issue in commit message(s)")
         return -1
-
+    
+    logging.debug("%s fixes found, %s refs found in %s", fixed_issue_count, refed_issue_count, commit_id)
     return 0
 
 
@@ -385,10 +389,71 @@ def jira_explicit_login(soap_client):
         # http://kerneltrap.org/index.php?q=mailarchive/git/2008/3/4/1062624/thread
         # The work-around is to re-assign stdin back to /dev/tty , as per
         # http://mail.python.org/pipermail/patches/2002-February/007193.html
-        sys.stdin = open('/dev/tty', 'r')
+        
+        logging.debug('Read user/pass from git config')
+        username = git_config_get('jira.username')
+        password = git_config_get('jira.password')
+        jira_url = git_config_get('jira.url')
+        # user name
+        if username == None or username == '':
+            try:
+                logging.debug('Read user from console')
+                sys.stdin = open('/dev/tty', 'r')
+                username = raw_input('Jira username: ')
+            except:
+                logging.debug('cannot read login user from console')
+        
+        if username == None or username == '':
+            try:
+                logging.debug('Read user from tkinter')
+                import Tkinter
+                import tkSimpleDialog
+                Tkinter.Tk().withdraw()
+                username = tkSimpleDialog.askstring('Username', 'Jira username')
+            except:
+                logging.debug('cannot read user with tkinter')
 
-        username = raw_input('Jira username: ')
-        password = getpass.getpass('Jira password: ')
+        if username == None or username == '':
+            logging.error("Jira username is not set. Please use 'git config jira.username <actual-jira-username> to set it'")
+            return None
+        # user pass
+        try:
+            import keyring
+            if password == None or password == '':
+                logging.debug('Read pass from keyring')
+                # comment line above if you need change pass
+                password = keyring.get_password(jira_url, username)
+        except:
+            logging.debug('cannot get pass with "keyring" module')
+
+        if password == None or password == '':
+            try:
+                logging.debug('Read pass from console')
+                sys.stdin = open('/dev/tty', 'r')
+                password = getpass.getpass('Jira password: ')
+            except:
+                logging.debug('cannot read pass from console')
+        
+        if password == None or password == '':
+            try:
+                logging.debug('Read pass from tkinter')
+                import Tkinter
+                import tkSimpleDialog
+                Tkinter.Tk().withdraw()
+                password = tkSimpleDialog.askstring('Password', 'Jira password')
+            except:
+                logging.debug('cannot read pass with tkinter')
+
+        try:
+            keyring.set_password(jira_url, username, password)
+        except:
+            logging.debug('cannot save pass with "keyring"')
+
+        if password == None or password == '':
+            logging.error("Jira password is not set. Please install 'Tkinter' and 'keyring' modules for user interactions")
+            return None
+        else:
+            logging.debug(password)
 
         # print "abc"
         # print "self.soap_client login...%s " % username + password
@@ -462,6 +527,7 @@ def jira_add_comment_to_and_fix_issue(issuekey, jira_soap_client, jira_text):
 #
 def get_jira_url():
     jira_url = git_config_get("jira.url")
+    logging.debug("jira_url: %s" % jira_url)
     if jira_url == None or jira_url == "":
         logging.error("Jira URL is not set. Please use 'git config jira.url <actual-jira-url> to set it'")
         return None
@@ -527,9 +593,15 @@ def save_cfg_value(cfg_file_name, section, key, value):
 # given a string, executes it as an executable, and returns the STDOUT
 # as a string
 def get_shell_cmd_output(cmd):
+    logging.debug("cmd: %s" % cmd)
     try:
-        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-        return proc.stdout.read().rstrip('\n')
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+        while(True):
+            if(proc.poll() is not None):
+                ret = proc.stdout.read().rstrip('\n')
+                logging.debug("cmd: %s  ::out:: %s" % (cmd, ret))
+                return ret
+
     except KeyboardInterrupt:
         logging.info("... interrupted")
 
@@ -589,7 +661,7 @@ def git_get_branchname_from_ref(ref):
 
 
 def git_config_get(name):
-    return get_shell_cmd_output("git config '" + name + "'")
+    return get_shell_cmd_output("git config " + name)
 
 def git_config_set(name, value):
     os.system("git config " + name + " '" + value + "'")
@@ -617,4 +689,3 @@ def git_get_array_of_commit_ids(start_id, end_id):
 # python script entry point. Dispatches main()
 if __name__ == "__main__":
   exit (main())
-    
